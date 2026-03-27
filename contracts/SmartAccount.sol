@@ -17,7 +17,8 @@ import {
     SIG_VALIDATION_SUCCESS
 } from "@account-abstraction/contracts/core/Helpers.sol";
 
-contract MinimalAccount is Ownable, IAccount {
+contract SmartAccount is Ownable, IAccount {
+    using MessageHashUtils for bytes32;
     IEntryPoint public i_entrypoint;
 
     constructor(address entrypoint) Ownable(msg.sender) {
@@ -46,19 +47,17 @@ contract MinimalAccount is Ownable, IAccount {
         return 0;
     }
 
-    function updateEntrypoint(address entrypoint) public onlyOwner() {
+    function updateEntrypoint(address entrypoint) public onlyOwner {
         i_entrypoint = IEntryPoint(entrypoint);
     }
 
-    receive() external payable{}
+    receive() external payable {}
 
     function _validateSignature(
         PackedUserOperation calldata userOp,
         bytes32 userOpHash
     ) private returns (uint256) {
-        bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(
-            userOpHash
-        );
+        bytes32 ethSignedMessageHash = formatHash(userOpHash);
         address signer = ECDSA.recover(ethSignedMessageHash, userOp.signature);
         if (signer != owner()) {
             return SIG_VALIDATION_FAILED;
@@ -73,6 +72,66 @@ contract MinimalAccount is Ownable, IAccount {
                 gas: type(uint256).max
             }("");
         }
+    }
+
+    function getUserOpDigest(
+        bytes memory _calldata,
+        address sender,
+        uint256 senderNonce
+    ) public view returns (bytes32, PackedUserOperation memory) {
+        PackedUserOperation memory unSignedUserOp = generateUnSignedUserOp(
+            _calldata,
+            sender,
+            senderNonce
+        );
+        bytes32 unsignedUserOpHash = i_entrypoint.getUserOpHash(unSignedUserOp);
+        bytes32 digest = formatHash(unsignedUserOpHash);
+        return (digest, unSignedUserOp);
+    }
+
+    function generateSignedUserOp(
+        PackedUserOperation memory unSignedUserOp,
+        bytes32 r,
+        bytes32 s,
+        uint8 v
+    ) public pure returns (PackedUserOperation memory) {
+        PackedUserOperation memory signedUserOp = unSignedUserOp;
+        signedUserOp.signature = abi.encodePacked(r, s, v);
+        return signedUserOp;
+    }
+
+    function generateUnSignedUserOp(
+        bytes memory _calldata,
+        address sender,
+        uint nonce
+    ) public pure returns (PackedUserOperation memory) {
+        uint128 verificationGasLimit = 16777216;
+        uint128 callGasLimit = verificationGasLimit;
+        uint128 maxPriorityFeePerGas = 256;
+        uint128 maxFeePerGas = maxPriorityFeePerGas;
+
+        return
+            PackedUserOperation({
+                callData: _calldata,
+                accountGasLimits: bytes32(
+                    (uint256(verificationGasLimit) << 128) | callGasLimit
+                ),
+                preVerificationGas: verificationGasLimit,
+                gasFees: bytes32(
+                    (uint256(maxPriorityFeePerGas) << 128) | maxFeePerGas
+                ),
+                initCode: hex"",
+                sender: sender,
+                nonce: nonce,
+                signature: hex"",
+                paymasterAndData: hex""
+            });
+    }
+
+    function formatHash(
+        bytes32 _hash
+    ) public pure returns (bytes32 formattedHash) {
+        formattedHash = _hash.toEthSignedMessageHash();
     }
 
     function _requireFromEntrypoint() private {
