@@ -21,7 +21,7 @@ contract SmartAccount is Ownable, IAccount {
     using MessageHashUtils for bytes32;
     IEntryPoint public i_entrypoint;
 
-    constructor(address entrypoint) Ownable(msg.sender) {
+    constructor(address intialOwner, address entrypoint) Ownable(intialOwner) {
         i_entrypoint = IEntryPoint(entrypoint);
     }
 
@@ -44,7 +44,6 @@ contract SmartAccount is Ownable, IAccount {
         _requireFromEntrypoint();
         validationData = _validateSignature(userOp, userOpHash);
         _payPreFund(missingAccountFunds);
-        return 0;
     }
 
     function updateEntrypoint(address entrypoint) public onlyOwner {
@@ -53,43 +52,22 @@ contract SmartAccount is Ownable, IAccount {
 
     receive() external payable {}
 
-    function _validateSignature(
-        PackedUserOperation calldata userOp,
-        bytes32 userOpHash
-    ) private returns (uint256) {
-        bytes32 ethSignedMessageHash = formatHash(userOpHash);
-        address signer = ECDSA.recover(ethSignedMessageHash, userOp.signature);
-        if (signer != owner()) {
-            return SIG_VALIDATION_FAILED;
-        }
-        return SIG_VALIDATION_SUCCESS;
-    }
+    // ------------- Utility Functions -------------
 
-    function _payPreFund(uint amount) private {
-        if (amount != 0) {
-            (bool success, ) = payable(msg.sender).call{
-                value: amount,
-                gas: type(uint256).max
-            }("");
-        }
-    }
-
-    function getUserOpDigest(
+    function getUnSignedUserOp(
         bytes memory _calldata,
         address sender,
         uint256 senderNonce
-    ) public view returns (bytes32, PackedUserOperation memory) {
-        PackedUserOperation memory unSignedUserOp = generateUnSignedUserOp(
+    ) public view returns (PackedUserOperation memory) {
+        PackedUserOperation memory unSignedUserOp = _generateUnSignedUserOp(
             _calldata,
             sender,
             senderNonce
         );
-        bytes32 unsignedUserOpHash = i_entrypoint.getUserOpHash(unSignedUserOp);
-        bytes32 digest = formatHash(unsignedUserOpHash);
-        return (digest, unSignedUserOp);
+        return unSignedUserOp;
     }
 
-    function generateSignedUserOp(
+    function getSignedUserOp(
         PackedUserOperation memory unSignedUserOp,
         bytes32 r,
         bytes32 s,
@@ -100,15 +78,47 @@ contract SmartAccount is Ownable, IAccount {
         return signedUserOp;
     }
 
-    function generateUnSignedUserOp(
+    function _validateSignature(
+        PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    ) private returns (uint256) {
+        bytes32 ethSignedMessageHash = _formatHash(userOpHash);
+        address signer = ECDSA.recover(ethSignedMessageHash, userOp.signature);
+        if (signer != owner()) {
+            return SIG_VALIDATION_FAILED;
+        }
+        return SIG_VALIDATION_SUCCESS;
+    }
+
+    function _payPreFund(uint amount) private {
+        require(
+            address(this).balance >= amount,
+            "Insufficient gas fees in smart account"
+        );
+        if (amount != 0) {
+            (bool success, ) = payable(msg.sender).call{
+                value: amount,
+                gas: type(uint256).max
+            }("");
+        }
+    }
+
+    function _formatHash(
+        bytes32 _hash
+    ) private pure returns (bytes32 formattedHash) {
+        formattedHash = _hash.toEthSignedMessageHash();
+    }
+
+    function _generateUnSignedUserOp(
         bytes memory _calldata,
         address sender,
         uint nonce
-    ) public pure returns (PackedUserOperation memory) {
-        uint128 verificationGasLimit = 16777216;
-        uint128 callGasLimit = verificationGasLimit;
-        uint128 maxPriorityFeePerGas = 256;
-        uint128 maxFeePerGas = maxPriorityFeePerGas;
+    ) private pure returns (PackedUserOperation memory) {
+        uint128 verificationGasLimit = 300_000; // validateUserOp + signature
+        uint128 callGasLimit = 400_000; // execute → Counter (tune up if execute reverts OOG)
+        uint128 preVerificationGas = 50_000; // bundler overhead (can tune; not millions)
+        uint128 maxPriorityFeePerGas = 1 gwei; // or 100_000_000 wei — use sane fees for your network
+        uint128 maxFeePerGas = 2 gwei; // must be ≥ basefee + priority on real chains
 
         return
             PackedUserOperation({
@@ -126,12 +136,6 @@ contract SmartAccount is Ownable, IAccount {
                 signature: hex"",
                 paymasterAndData: hex""
             });
-    }
-
-    function formatHash(
-        bytes32 _hash
-    ) public pure returns (bytes32 formattedHash) {
-        formattedHash = _hash.toEthSignedMessageHash();
     }
 
     function _requireFromEntrypoint() private {
