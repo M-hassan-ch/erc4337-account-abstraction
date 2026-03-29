@@ -1,10 +1,10 @@
 import type { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
-import { loadEnvFile } from "process";
+import { loadEnvFile } from "node:process";
 loadEnvFile();
 
 const RPC_URL = process.env.RPC_URL!;
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY;
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY!
 
 const config: HardhatUserConfig = {
@@ -22,7 +22,7 @@ const config: HardhatUserConfig = {
   networks: {
     sepolia: {
       url: RPC_URL,
-      accounts: [PRIVATE_KEY as `0x${string}`],
+      accounts: [DEPLOYER_PRIVATE_KEY as `0x${string}`],
       chainId: 11155111,
     },
   },
